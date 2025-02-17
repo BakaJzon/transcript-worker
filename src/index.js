@@ -8,23 +8,25 @@ const htmlContent = `
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>字幕转文稿</title>
 <style>
+/* (Previous styles remain unchanged) */
 body {
 	font-family: sans-serif;
 	display: flex;
 	flex-direction: column;
-	align-items: center; /* Center horizontally */
-	justify-content: center; /* Center vertically */
-	min-height: 100vh; /* Ensure full viewport height */
-	margin: 0; /* Remove default body margin */
-	background-color: #f0f0f0; /* Light gray background */
+	align-items: center;
+	justify-content: center;
+	min-height: 100vh;
+	margin: 0;
+	background-color: #f0f0f0;
 }
 
 .container {
-	width: 60%; /* Or any desired width */
+	width: 80%;
+	max-width: 800px;
 	padding: 20px;
-	box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+	box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
 	background-color: white;
-	border-radius: 8px; /* Rounded corners */
+	border-radius: 8px;
 }
 
 h1 {
@@ -34,12 +36,12 @@ h1 {
 
 #io-container {
 display: flex;
-gap: 20px; /* Space between input and output */
+gap: 20px;
 margin-bottom: 10px;
 }
 
 .io-panel {
-	flex: 1; /* Equal width for input and output */
+	flex: 1;
 	display: flex;
 	flex-direction: column;
 }
@@ -51,7 +53,7 @@ margin-bottom: 10px;
 
 .io-panel textarea {
 	width: 100%;
-	height: 400px; /* Increased height */
+	height: 300px;
 	padding: 10px;
 	box-sizing: border-box;
 	border: 1px solid #ccc;
@@ -65,9 +67,10 @@ white-space: pre-wrap;
 
 #controls {
 display: flex;
-justify-content: center; /* Center buttons */
+justify-content: center;
 gap: 10px;
 margin-bottom: 20px;
+flex-wrap: wrap; /* Allow buttons to wrap on smaller screens */
 }
 
 #settings {
@@ -78,9 +81,43 @@ margin-bottom: 20px;
 margin-bottom: 10px;
 }
 
+#download-section {
+display: flex;
+align-items: center;
+gap: 10px;
+justify-content: center; /* Center download controls */
+}
+
+#downloadFilename {
+width: 100px; /* Adjust as needed */
+}
+
 .hidden {
 	display: none;
 }
+
+/* Style for visually hidden file input */
+#fileInput {
+width: 0.1px;
+height: 0.1px;
+opacity: 0;
+overflow: hidden;
+position: absolute;
+z-index: -1;
+}
+
+/* Style for the import button to look like a regular button */
+#importButton {
+/* Same styles as other buttons */
+background-color: #4CAF50;
+color: white;
+padding: 10px 15px;
+border: none;
+border-radius: 4px;
+cursor: pointer;
+}
+
+
 </style>
 </head>
 <body>
@@ -97,8 +134,22 @@ margin-bottom: 10px;
 </div>
 
 <div id="controls">
+<input type="file" id="fileInput" accept=".txt,.ass,.srt,.vtt" class="hidden">
+<button id="importButton">导入</button>
+<select id="conversionType">
+<option value="none">不转换</option>
+<option value="srt">SRT</option>
+<option value="vtt">VTT</option>
+<option value="ass">ASS</option>
+<option value="txt">TXT</option>
+</select>
+<button id="convertButton">转换</button>
 <button id="startButton">开始</button>
 <button id="stopButton" disabled>中断</button>
+<div id="download-section">
+<input type="text" id="downloadFilename" value="script" placeholder="文件名">
+<button id="downloadButton">输出下载</button>
+</div>
 </div>
 
 <div id="io-container">
@@ -120,112 +171,241 @@ const startButton = document.getElementById('startButton');
 const stopButton = document.getElementById('stopButton');
 const inputArea = document.getElementById('inputArea');
 const outputArea = document.getElementById('outputArea');
+const fileInput = document.getElementById('fileInput');
+const importButton = document.getElementById('importButton'); // Import button
+const convertButton = document.getElementById('convertButton');
+const conversionType = document.getElementById('conversionType');
+const downloadButton = document.getElementById('downloadButton');
+const downloadFilename = document.getElementById('downloadFilename');
 let abortController = null;
 
-// --- Drag and Drop ---
-inputArea.addEventListener('dragover', (event) => {
-	event.preventDefault();
-	event.dataTransfer.dropEffect = 'copy';
-});
+// --- Utility Functions ---
 
-inputArea.addEventListener('drop', async (event) => {
-	event.preventDefault();
-	const file = event.dataTransfer.files[0];
-	if (file) {
-		const text = await file.text();
-		inputArea.value = text;
-	}
-});
-
-// --- URL Import ---
-async function importFromURL(url) {
-	try {
-		const response = await fetch(url);
-		if (!response.ok) {
-			throw new Error(\`HTTP error! status: \${response.status}, URL: \${url}\`);
+function parseSRT(text) {
+	const lines = text.trim().split('\\n');
+	let result = '';
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].trim() === '' || !isNaN(parseInt(lines[i]))) {
+			continue; // Skip empty lines and sequence numbers
 		}
-		const text = await response.text();
-		inputArea.value = text;
-	} catch (error) {
-		alert("URL导入失败: " + error);
-		console.error('Error fetching from URL:', error);
+		if (lines[i].includes('-->')) {
+			continue; // Skip timestamp lines
+		}
+		result += lines[i].trim() + ' ';
 	}
+	return result.trim();
 }
 
-// --- Start Processing ---
-startButton.addEventListener('click', async () => {
-	const subtitles = inputArea.value.trim();
-	if (!subtitles) {
-		alert('请输入字幕!');
-		return;
-	}
-
-	const apiUrl = apiUrlInput.value.trim() || '/api'; // Use default if empty.
-	outputArea.value = ''; // Clear previous output
-	startButton.disabled = true;
-	stopButton.disabled = false;
-	abortController = new AbortController();
-
-	try {
-		const response = await fetch(apiUrl, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'text/plain',
-			},
-			body: subtitles,
-			signal: abortController.signal, // Pass the abort signal
-		});
-
-		if (!response.ok) {
-			throw new Error(\`HTTP error! status: \${response.status}\`);
+function parseVTT(text) {
+	const lines = text.trim().split('\\n');
+	let result = '';
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].trim() === '' || lines[i].startsWith('WEBVTT') || lines[i].includes('-->')) {
+			continue; // Skip empty lines, WEBVTT header, and timestamp lines
 		}
+		result += lines[i].trim() + ' ';
+	}
+	return result.trim();
+}
 
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder('utf-8');
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) {
-				break;
+function parseASS(text) {
+	const lines = text.trim().split('\\n');
+	let result = '';
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].startsWith('Dialogue:')) {
+			const parts = lines[i].split(',');
+			if (parts.length > 9) {
+				result += parts.slice(9).join(',').trim() + ' '; // Extract text after the 9th comma
 			}
-			const decodedChunk = decoder.decode(value, { stream: true });
-			outputArea.value += decodedChunk;
-			outputArea.scrollTop = outputArea.scrollHeight; // Auto-scroll
+		}
+	}
+	return result.replace(/\\{[^}]+\\}/g, '').trim(); // Remove ASS tags like {\\pos(x,y)}
+	}
+
+
+	function convertSubtitles(text, type) {
+		switch (type) {
+			case 'srt':
+				return parseSRT(text);
+			case 'vtt':
+				return parseVTT(text);
+			case 'ass':
+				return parseASS(text);
+			case 'txt':
+				return text; // For TXT, no conversion needed
+			default:
+				return text;
+		}
+	}
+
+	// --- Drag and Drop ---
+	inputArea.addEventListener('dragover', (event) => {
+		event.preventDefault();
+		event.dataTransfer.dropEffect = 'copy';
+	});
+
+	inputArea.addEventListener('drop', async (event) => {
+		event.preventDefault();
+		const file = event.dataTransfer.files[0];
+		if (file) {
+			await handleFile(file);
+		}
+	});
+
+	// --- File Input (Import Button) ---
+	importButton.addEventListener('click', () => {
+		fileInput.click(); // Trigger the file input
+	});
+
+	fileInput.addEventListener('change', async () => {
+		if (fileInput.files.length > 0) {
+			await handleFile(fileInput.files[0]);
+			fileInput.value = ''; // Clear the file input
+		}
+	});
+
+
+	async function handleFile(file) {
+		const text = await file.text();
+		const fileExtension = file.name.split('.').pop().toLowerCase();
+
+		if (['srt', 'vtt', 'ass', 'txt'].includes(fileExtension)) {
+			const convertedText = convertSubtitles(text, fileExtension);
+			inputArea.value = convertedText;
+		}  else {
+			alert('不支持的文件格式。请使用 .txt, .srt, .vtt, 或 .ass 文件。');
+		}
+	}
+
+
+	// --- URL Import ---
+	async function importFromURL(url) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok) {
+				throw new Error(\`HTTP error! status: \${response.status}, URL: \${url}\`);
+			}
+			const text = await response.text();
+			// Try to guess the subtitle format from the URL
+			const urlLower = url.toLowerCase();
+			let format = 'none';
+			if (urlLower.endsWith('.srt')) {
+				format = 'srt';
+			} else if (urlLower.endsWith('.vtt')) {
+				format = 'vtt';
+			} else if (urlLower.endsWith('.ass')) {
+				format = 'ass';
+			} else if (urlLower.endsWith('.txt')) {
+				format = 'txt';
+			}
+
+			inputArea.value = convertSubtitles(text, format);
+
+		} catch (error) {
+			alert("URL导入失败: " + error);
+			console.error('Error fetching from URL:', error);
+		}
+	}
+
+
+	// --- Convert Button ---
+	convertButton.addEventListener('click', () => {
+		const text = inputArea.value;
+		const type = conversionType.value;
+		inputArea.value = convertSubtitles(text, type);
+	});
+
+	// --- Start Processing ---
+	startButton.addEventListener('click', async () => {
+		const subtitles = inputArea.value.trim();
+		if (!subtitles) {
+			alert('请输入字幕!');
+			return;
 		}
 
-	} catch (error) {
-		if (error.name === 'AbortError') {
-			outputArea.value += "\\n已中断";
-			console.log('Fetch aborted');
-		} else {
-			outputArea.value += \`\\nError: \${error.message}\`;
-			console.error('Error during fetch:', error);
-			alert("发生错误: " + error);
+		const apiUrl = apiUrlInput.value.trim() || '/api'; // Use default if empty.
+		outputArea.value = ''; // Clear previous output
+		startButton.disabled = true;
+		stopButton.disabled = false;
+		abortController = new AbortController();
+
+		try {
+			const response = await fetch(apiUrl, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'text/plain',
+				},
+				body: subtitles,
+				signal: abortController.signal, // Pass the abort signal
+			});
+
+			if (!response.ok) {
+				throw new Error(\`HTTP error! status: \${response.status}\`);
+			}
+
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder('utf-8');
+
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+				const decodedChunk = decoder.decode(value, { stream: true });
+				outputArea.value += decodedChunk;
+				outputArea.scrollTop = outputArea.scrollHeight; // Auto-scroll
+			}
+
+		} catch (error) {
+			if (error.name === 'AbortError') {
+				outputArea.value += "\\n已中断";
+				console.log('Fetch aborted');
+			} else {
+				outputArea.value += \`\\nError: \${error.message}\`;
+				console.error('Error during fetch:', error);
+				alert("发生错误: " + error);
+			}
+		} finally {
+			startButton.disabled = false;
+			stopButton.disabled = true;
+			abortController = null;
 		}
-	} finally {
-		startButton.disabled = false;
-		stopButton.disabled = true;
-		abortController = null;
+	});
+
+	// --- Stop Processing ---
+	stopButton.addEventListener('click', () => {
+		if (abortController) {
+			abortController.abort();
+		}
+	});
+
+	// --- Download Button ---
+	downloadButton.addEventListener('click', () => {
+		const textToDownload = outputArea.value;
+		const filename = downloadFilename.value.trim() || 'script'; // Use default if empty
+		const blob = new Blob([textToDownload], { type: 'text/plain' });
+		const url = URL.createObjectURL(blob);
+
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename + '.txt';
+		document.body.appendChild(a); // Required for Firefox
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url); // Clean up
+	});
+
+	// --- URL Input ---
+	const url = new URL(window.location.href);
+	const urlParam = url.searchParams.get("url");
+	if (urlParam) {
+		importFromURL(urlParam);
 	}
-});
 
-// --- Stop Processing ---
-stopButton.addEventListener('click', () => {
-	if (abortController) {
-		abortController.abort();
-	}
-});
+	</script>
+	</body>
+	</html>
 
-// --- URL Input ---
-const url = new URL(window.location.href);
-const urlParam = url.searchParams.get("url");
-if (urlParam) {
-	importFromURL(urlParam);
-}
-
-</script>
-</body>
-</html>
 `;
 
 
