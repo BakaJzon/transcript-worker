@@ -1,0 +1,6 @@
+http://localhost:2025 {
+	reverse_proxy /api https://transcript.bkjzon.workers.dev
+	file_server {
+		root src
+	}
+}

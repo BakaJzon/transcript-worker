@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>字幕转文稿</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center; /* Center horizontally */
+      justify-content: center; /* Center vertically */
+      min-height: 100vh; /* Ensure full viewport height */
+      margin: 0; /* Remove default body margin */
+      background-color: #f0f0f0; /* Light gray background */
+    }
+
+    .container {
+      width: 80%; /* Or any desired width */
+      max-width: 800px; /* Maximum width */
+      padding: 20px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+      background-color: white;
+      border-radius: 8px; /* Rounded corners */
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    #io-container {
+      display: flex;
+      gap: 20px; /* Space between input and output */
+      margin-bottom: 10px;
+    }
+
+    .io-panel {
+      flex: 1; /* Equal width for input and output */
+      display: flex;
+      flex-direction: column;
+    }
+
+    .io-panel label {
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+
+    .io-panel textarea {
+      width: 100%;
+      height: 300px; /* Increased height */
+      padding: 10px;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      resize: vertical;
+    }
+
+    #outputArea {
+      overflow-y: scroll;
+      white-space: pre-wrap;
+    }
+
+    #controls {
+      display: flex;
+      justify-content: center; /* Center buttons */
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    #settings {
+      margin-bottom: 20px;
+    }
+
+    #settings details {
+      margin-bottom: 10px;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h1>字幕转文稿</h1>
+
+    <div id="settings">
+      <details>
+        <summary>设置</summary>
+        <label for="apiUrl">API 地址:</label>
+        <input type="text" id="apiUrl" value="/api" placeholder="例如：/api">
+      </details>
+    </div>
+
+    <div id="controls">
+      <button id="startButton">开始</button>
+      <button id="stopButton" disabled>中断</button>
+    </div>
+
+    <div id="io-container">
+      <div class="io-panel">
+        <label for="inputArea">字幕 (支持拖拽或粘贴):</label>
+        <textarea id="inputArea" placeholder="请在此处输入字幕..."></textarea>
+      </div>
+
+      <div class="io-panel">
+        <label for="outputArea">文稿:</label>
+        <textarea id="outputArea" readonly></textarea>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const apiUrlInput = document.getElementById('apiUrl');
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const inputArea = document.getElementById('inputArea');
+    const outputArea = document.getElementById('outputArea');
+    let abortController = null;
+
+    // --- Drag and Drop ---
+    inputArea.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+
+    inputArea.addEventListener('drop', async (event) => {
+      event.preventDefault();
+      const file = event.dataTransfer.files[0];
+      if (file) {
+        const text = await file.text();
+        inputArea.value = text;
+      }
+    });
+
+    // --- URL Import ---
+    async function importFromURL(url) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}, URL: ${url}`);
+        }
+        const text = await response.text();
+        inputArea.value = text;
+      } catch (error) {
+        alert("URL导入失败: " + error);
+        console.error('Error fetching from URL:', error);
+      }
+    }
+
+    // --- Start Processing ---
+    startButton.addEventListener('click', async () => {
+      const subtitles = inputArea.value.trim();
+      if (!subtitles) {
+        alert('请输入字幕!');
+        return;
+      }
+
+      const apiUrl = apiUrlInput.value.trim() || '/api'; // Use default if empty.
+      outputArea.value = ''; // Clear previous output
+      startButton.disabled = true;
+      stopButton.disabled = false;
+      abortController = new AbortController();
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain',
+          },
+          body: subtitles,
+          signal: abortController.signal, // Pass the abort signal
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          const decodedChunk = decoder.decode(value, { stream: true });
+          outputArea.value += decodedChunk;
+          outputArea.scrollTop = outputArea.scrollHeight; // Auto-scroll
+        }
+
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          outputArea.value += "\n已中断";
+          console.log('Fetch aborted');
+        } else {
+          outputArea.value += `\nError: ${error.message}`;
+          console.error('Error during fetch:', error);
+          alert("发生错误: " + error);
+        }
+      } finally {
+        startButton.disabled = false;
+        stopButton.disabled = true;
+        abortController = null;
+      }
+    });
+
+    // --- Stop Processing ---
+    stopButton.addEventListener('click', () => {
+      if (abortController) {
+        abortController.abort();
+      }
+    });
+
+    // --- URL Input ---
+    const url = new URL(window.location.href);
+    const urlParam = url.searchParams.get("url");
+    if (urlParam) {
+      importFromURL(urlParam);
+    }
+
+  </script>
+</body>
+</html>
