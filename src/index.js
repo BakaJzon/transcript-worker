@@ -191,7 +191,7 @@ function parseSRT(text) {
 		if (lines[i].includes('-->')) {
 			continue; // Skip timestamp lines
 		}
-		result += lines[i].trim() + ' ';
+		result += lines[i].trim() + '\\n';
 	}
 	return result.trim();
 }
@@ -203,7 +203,7 @@ function parseVTT(text) {
 		if (lines[i].trim() === '' || lines[i].startsWith('WEBVTT') || lines[i].includes('-->')) {
 			continue; // Skip empty lines, WEBVTT header, and timestamp lines
 		}
-		result += lines[i].trim() + ' ';
+		result += lines[i].trim() + '\\n';
 	}
 	return result.trim();
 }
@@ -215,7 +215,7 @@ function parseASS(text) {
 		if (lines[i].startsWith('Dialogue:')) {
 			const parts = lines[i].split(',');
 			if (parts.length > 9) {
-				result += parts.slice(9).join(',').trim() + ' '; // Extract text after the 9th comma
+				result += parts.slice(9).join(',').trim() + '\\n'; // Extract text after the 9th comma
 			}
 		}
 	}
@@ -415,9 +415,9 @@ export default {
 			apiKey: env.OPENAI_API_KEY,
 			baseURL: env.OPENAI_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
 			model: env.OPENAI_MODEL || 'qwen-turbo-latest',
-			temp: env.MODEL_TEMPERATURE || 0.4,
-			max_tokens: env.MODEL_MAX_TOKENS || 6400,
-			max_rounds: 3,
+			temp: env.MODEL_TEMPERATURE || 0.6,
+			max_tokens: env.MODEL_MAX_TOKENS || 8192,
+			max_rounds: 10,
 			systemPrompt:
 `你是一个视频文稿助手，任务是将视频的字幕重新组织为原来的文稿。
 请按以下要求对字幕进行处理：
@@ -426,7 +426,7 @@ export default {
 2. **删除冗余的语气词**：删除所有不必要的语气词和填充词（例如：“嗯”、“啊”、“就”、“那个”、“像是说”、“so”、“that”、“其实”等），使文本更加简洁。
 3. **处理广告部分**：如果字幕中包含广告内容，请删除。
 4. **标点符号**：补充适当的标点符号（如句号、逗号、引号等），以确保语句的语法正确。
-5. **分段**：重新分段，按传统文章的格式分段，每段应包含一个完整的观点或事件，而非单个标点符号分段。
+5. **分段**：重新分段，按传统文章的格式分段，每段应包含一个观点或事件，而非单个标点符号分段。相反地，多个事件请分多段，即使段落本身不长。一段不超过5句话。
 6. **修正错误**：字幕文件可能包含语音识别错误（如错字、缺字等），你需要根据上下文修正这些错误。
 7. **输出结束标记**：在转换后的文本末尾输出 \`<end/>\`，表示文稿输出完成。如果因单轮回答超过上限也不要自行压缩语句，而是通过多轮对话完成。
 
@@ -475,6 +475,7 @@ export default {
 					messages: messages,
 					model: config.model,
 					temperature: config.temp,
+					// top_p: 0.8,
 					max_tokens: config.max_tokens,
 					stream: true,
 				});
@@ -515,7 +516,7 @@ export default {
 					while (rounds < config.max_rounds) {
 						const { text, finished } = await handleCompletion(conversationHistory);
 
-						if (finished || text.indexOf("<end/>")) {
+						if (finished || text.includes("<end/>")) {
 							break;
 						}
 
